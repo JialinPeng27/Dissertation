@@ -1,0 +1,1260 @@
+---
+title: "The Moderating Effect of Urban and Rural Differences on the Association between Digital Inclusion and Subjective Wellbeing among Older Adults in Scotland"
+author: '2021209'
+date: "2025-07-21"
+output: html_document
+---
+
+
+```{r}
+library(haven)
+library(dplyr) 
+library(psych)
+library(lavaan)
+library(ggplot2)
+library(scales)
+library(knitr)
+library(glue)
+library(tidyr)
+library(ggridges)
+library(broom)
+library(semTools) 
+library(car)        
+library(interactions) 
+library(lavaanPlot)
+library(jtools)
+library(sandwich)
+library(lmtest)
+```
+
+```{r}
+data <- read_sav('/Users/stuber/Desktop/Dissertation/UKDA-9130-spss/spss/spss25/sn9130_ukds.sav')
+```
+
+
+# Variable cleaning
+```{r}
+data<- data %>% 
+  filter(!is.na(DEM_SETT_code) & DEM_SETT_code != -8) %>% 
+  filter(!is.na(WB_Satisfied) & WB_Satisfied != -8) %>% 
+  filter(!is.na(WB_ThingsWorthwhile) & WB_ThingsWorthwhile != -8) %>%
+  filter(!is.na(WB_Happy) & WB_Happy != -8) %>%
+  filter(!is.na(WB_Anxious) & WB_Anxious != -8) %>%
+  filter(!is.na(DEM_Gender) & DEM_Gender != -8) %>%
+  filter(!is.na(DEM_Age_Band) & DEM_Age_Band != -8) %>%
+  filter(!is.na(DEM_Ethnicity) & !DEM_Ethnicity %in% c(-6, -8)) %>%
+  filter(!is.na(DEM_Employment) & DEM_Employment != -8) %>%
+  filter(!is.na(DEM_MaritalStatus) & !DEM_MaritalStatus %in% c(-6, -8)) %>%
+  filter(!is.na(WB_EnoughT) & WB_EnoughT != -8) %>%
+  filter(!is.na(HE_IllnessActivity) & !HE_IllnessActivity %in% c(-7, -8))
+```
+
+
+# Variable distribution
+```{r}
+data$Urban_Rural_Type <- with(data, ifelse(DEM_SETT_code %in% c(1.0, 2.0, 3.0, 4.0, 5.0), "Urban Areas",
+                                   ifelse(DEM_SETT_code %in% c(6.0, 7.0, 8.0), "Rural Areas", NA)))
+
+table(data$Urban_Rural_Type) 
+```
+
+```{r}
+df <- data
+Urban_Rural_Type_dist <- data %>%
+  count(Urban_Rural_Type) %>%
+  arrange(desc(n)) %>%
+  mutate(
+    percent = n / sum(n) * 100,
+    Urban_Rural_Type = factor(
+      Urban_Rural_Type,
+      levels = Urban_Rural_Type
+    )
+  )
+
+ggplot(Urban_Rural_Type_dist, aes(x = Urban_Rural_Type, y = n)) +
+  geom_col(fill = "steelblue", width = 0.7) +
+  geom_text(aes(label = paste0(round(percent, 1), "%")), 
+            vjust = -0.5, size = 3) +
+  scale_y_continuous(
+    expand = expansion(c(0, 0.1))
+  ) +
+  labs(
+    title = "Distribution of Residence Types (N = 1,979)",
+    x     = "Urban-Rural Type",
+    y     = "Count"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title    = element_text(size = 12, hjust = 0.5),
+    axis.text.x   = element_text(size = 10, angle = 45, hjust = 1),
+    axis.title.x  = element_text(size = 11)
+  )
+```
+
+```{r}
+Gender_dist <- df %>%
+  count(DEM_Gender) %>%
+  mutate(
+    percent = n / sum(n) * 100,
+    Gender  = case_when(
+      DEM_Gender == 1 ~ "Male",
+      DEM_Gender == 2 ~ "Female",
+      TRUE            ~ "Other"
+    )
+  )
+print(Gender_dist)
+```
+
+```{r}
+ggplot(
+  df %>% 
+    mutate(
+      DEM_Gender = factor(
+        DEM_Gender, 
+        levels = c(1, 2), 
+        labels = c("Male", "Female")
+      )
+    ),
+  aes(x = Urban_Rural_Type, fill = DEM_Gender)
+) +
+  geom_bar(position = "fill") +
+  scale_y_continuous(
+    labels = scales::percent_format(accuracy = 1)
+  ) +
+  scale_fill_discrete(
+    name = "Gender",
+    na.translate = FALSE
+  ) +
+  labs(
+    x     = "Urban-Rural Type",
+    y     = "Proportion",
+    title = "Proportion of Male and Female by Residence Type"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+Age_dist <- df %>%
+  mutate(
+    label = case_when(
+      DEM_Age_Band %in% c(1, 2) ~ "50–59",
+      DEM_Age_Band %in% c(3, 4) ~ "60–69",
+      DEM_Age_Band %in% c(5, 6) ~ "70+",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(label)) %>%
+  count(label) %>%
+  mutate(
+    percent = round(n / sum(n) * 100, 1)
+  )
+
+ggplot(Age_dist, aes(x = label, y = percent)) +
+  geom_col(fill = "steelblue", width = 0.7) +
+  geom_text(aes(label = n), 
+            vjust = -0.5, size = 4.5) +
+  scale_y_continuous(expand = expansion(c(0, 0.1))) +
+  labs(
+    title = "Age Distribution of Sample (n = 1,979)",
+    x = "Age Band",
+    y = "Percentage (%)"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title    = element_text(size = 13, hjust = 0.5), 
+    axis.text.x   = element_text(size = 11),
+    axis.title.x  = element_text(size = 12),
+    axis.title.y  = element_text(size = 12)
+  )
+```
+
+```{r}
+df <- df %>%
+  mutate(
+    Economic_Activity_Status = case_when(
+      DEM_Employment %in% c(1, 2, 3, 6) ~ "Economically Active", 
+      DEM_Employment %in% c(4, 5, 7, 8, 9, 10) ~ "Economically Inactive", 
+      DEM_Employment == 11 ~ "Other/Unknown",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(
+    !is.na(Economic_Activity_Status)
+  )
+
+Eco_dist <- df %>%
+  count(Economic_Activity_Status) %>%
+  mutate(percent = round(n / sum(n) * 100, 1))
+
+Eco_dist %>%
+  kable(caption = glue("Table 4‑Y: Distribution of Economic Activity Status (n = {nrow(df)})"))
+```
+
+```{r}
+ggplot(Eco_dist, aes(x = Economic_Activity_Status, y = percent)) +
+  geom_col(fill = "coral", width = 0.7) +
+  geom_text(aes(label = paste0(percent, "%")), vjust = -0.2, size = 4) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.15))) +
+  labs(
+    title = "Sample Distribution by Economic Activity Status",
+    x     = "Economic Activity Status",
+    y     = "Percentage (%)"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5))
+```
+
+```{r}
+df %>%
+  count(DEM_Ethnicity) %>%
+  mutate(percent = round(n / sum(n) * 100, 1))
+```
+
+```{r}
+df <- df %>%
+  mutate(
+    Living_Status = case_when(
+      DEM_MaritalStatus %in% c(1, 2) ~ "With Partner/Spouse",
+      DEM_MaritalStatus %in% c(3, 4) ~ "Single or Other",
+      TRUE ~ NA_character_
+    ),
+    
+    Ethnic_Group = case_when(
+      DEM_Ethnicity %in% 1:6   ~ "White",
+      DEM_Ethnicity == 7       ~ "Mixed or Multiple",
+      DEM_Ethnicity %in% 8:12  ~ "Asian or Asian British",
+      DEM_Ethnicity %in% 13:17 ~ "Black or Black British",
+      DEM_Ethnicity %in% 18:19 ~ "Other",
+      TRUE                     ~ NA_character_
+    )
+  )
+
+Living_dist <- df %>%
+  count(Living_Status) %>%
+  mutate(percent = round(n / sum(n) * 100, 1))
+
+Ethnic_dist <- df %>%
+  count(Ethnic_Group) %>%
+  mutate(percent = round(n / sum(n) * 100, 1))
+
+Living_dist %>%
+  kable(
+    caption = paste0("Table X: Living Status Distribution (n = ", sum(Living_dist$n), ")"),
+    col.names = c("Living Status", "Count", "Percent (%)")
+  )
+
+Ethnic_dist %>%
+  kable(
+    caption = paste0("Table Y: Ethnicity Distribution (n = ", sum(Ethnic_dist$n), ")"),
+    col.names = c("Ethnicity", "Count", "Percent (%)")
+  )
+```
+
+```{r}
+df <- df %>%
+  mutate(
+    IllnessActivity = ifelse(HE_IllnessActivity == -9, 3, HE_IllnessActivity),
+    IllnessActivity = case_when(
+      IllnessActivity %in% c(1, 2) ~ "Yes",
+      IllnessActivity == 3 ~ "No",
+      TRUE ~ NA_character_
+    )
+  )
+df$IllnessActivity <- factor(df$IllnessActivity, levels = c("Yes", "No"))
+unique(df$IllnessActivity)
+```
+
+```{r}
+df$WB_EnoughTime <- ifelse(df$WB_EnoughT <= 3, "Disagree",
+                               ifelse(df$WB_EnoughT >= 4, "Agree", NA))
+
+df$WB_EnoughTime <- factor(df$WB_EnoughTime, levels = c("Disagree", "Agree"))
+unique(df$IllnessActivity)
+```
+
+
+# Confidence and structural testing of well-being
+```{r}
+df$WB_Anxious_rev <- 10 - data$WB_Anxious
+
+WB_items <- df %>%
+  dplyr::select(WB_Satisfied, WB_ThingsWorthwhile,
+                WB_Happy,     WB_Anxious_rev) %>%
+  mutate(across(everything(), ~ as.numeric(as.character(.))))
+
+# Cronbach α
+alpha_res <- psych::alpha(WB_items, check.keys = TRUE)
+alpha_res$total$raw_alpha
+alpha_res$item.total
+
+# McDonald ω_t
+omega_res <- omega(WB_items, nfactors = 1, check.keys = TRUE)
+omega_res$omega.t
+
+# Correlation
+cor(WB_items, use="pairwise.complete.obs")
+```
+
+```{r}
+# Simple average method (Not adopted)
+df$Wellbeing_average <- rowMeans(df[, c("WB_Satisfied", 
+                                          "WB_Happy", 
+                                          "WB_ThingsWorthwhile", 
+                                          "WB_Anxious_rev")],
+                                 na.rm = TRUE)
+
+summary(df$Wellbeing_average)
+
+sd_val <- sd(df$Wellbeing_average) 
+sd_val
+```
+
+```{r}
+shapiro_res <- shapiro.test(df$Wellbeing_average)
+shapiro_res
+
+qqnorm(df$Wellbeing_average, main = "Q-Q Plot: Wellbeing_average")
+qqline(df$Wellbeing_average)
+```
+
+```{r}
+group_stats <- df %>%
+  group_by(Urban_Rural_Type) %>%     
+  summarize(
+    n    = n(),
+    mean = mean(Wellbeing_average, na.rm = TRUE),
+    sd   = sd(Wellbeing_average,   na.rm = TRUE)
+  )
+group_stats 
+```
+
+```{r}
+t_res <- t.test(Wellbeing_average ~ Urban_Rural_Type,
+                var.equal = FALSE,    
+                data = df)
+
+t_res$p.value 
+```
+
+```{r}
+plot(density(df$Wellbeing_average, na.rm = TRUE), 
+     main = "Kernel Density of Wellbeing Index", 
+     xlab = "Wellbeing Index")
+```
+
+
+```{r}
+# Confirmatory Factor Analysis (Adopted)
+df <- df %>%
+  mutate(across(where(is.labelled), ~as.numeric(.)))
+
+WB_model <- '
+  Wellbeing =~ WB_Satisfied + WB_ThingsWorthwhile + WB_Happy + WB_Anxious_rev
+'
+fit <- cfa(WB_model, data = df, std.lv = TRUE, missing = "FIML")
+summary(fit, fit.measures = TRUE, standardized = TRUE)
+
+df$Wellbeing_Factor <- lavPredict(fit, method = "regression")
+```
+```{r}
+loadings_table <- parameterEstimates(fit, standardized = TRUE) %>%
+  filter(op == "=~") %>% 
+  select(Indicator = rhs,
+         Std_Loading = std.all,
+         SE = se,
+         p_value = pvalue) %>%
+  mutate(R2 = inspect(fit, "r2")[Indicator])
+
+loadings_table
+```
+
+```{r}
+labs_cfa <- c(
+  Wellbeing            = "Wellbeing",
+  WB_Satisfied         = "Life satisfaction",
+  WB_ThingsWorthwhile  = "Worthwhile",
+  WB_Happy             = "Happiness",
+  WB_Anxious_rev       = "Low anxiety"
+)
+
+p_cfa <- lavaanPlot(
+  model = fit,            
+  labels = labs_cfa,
+  coefs = TRUE,        
+  stand = TRUE,  
+  covs  = FALSE,  
+  node_options = list(shape="box", fontsize=12, fontname="Helvetica", width=1.6),
+  edge_options = list(penwidth=1.2),
+  graph_options = list(layout="dot", rankdir="LR", nodesep="0.4", ranksep="0.6")
+)
+p_cfa
+
+DiagrammeRsvg::export_svg(p_cfa) |>
+  charToRaw() |>
+  rsvg::rsvg_png("wellbeing_cfa_std.png", width=2000, height=1200)
+```
+
+```{r}
+overall_mean <- mean(df$Wellbeing_Factor, na.rm = TRUE) 
+overall_sd   <- sd(df$Wellbeing_Factor,   na.rm = TRUE)
+```
+
+```{r}
+group_stats <- df %>%
+  group_by(Urban_Rural_Type) %>%
+  summarize(
+    n    = n(),
+    mean = mean(Wellbeing_Factor, na.rm = TRUE),
+    sd   = sd(Wellbeing_Factor, na.rm = TRUE)
+  )
+t_res <- t.test(Wellbeing_Factor ~ Urban_Rural_Type, data = df)
+t_res$p.value 
+```
+
+```{r}
+means_df <- df %>%
+  filter(!is.na(Urban_Rural_Type), !is.na(Wellbeing_Factor)) %>%
+  group_by(Urban_Rural_Type) %>%
+  summarise(mean = mean(Wellbeing_Factor), .groups = "drop")
+
+ggplot(df, aes(x = Wellbeing_Factor, y = Urban_Rural_Type, fill = Urban_Rural_Type)) +
+  geom_density_ridges(alpha = 0.6, scale = 0.9) +
+  geom_vline(data = means_df,
+             aes(xintercept = mean),
+             linetype = "dashed",
+             size = 0.8,
+             color = "black",  
+             inherit.aes = FALSE) + 
+  geom_text(data = means_df,
+            aes(x = mean, y = Urban_Rural_Type,
+                label = sprintf("Mean = %.2f", mean)),
+            hjust = -0.1, vjust = -0.3, size = 4.5, fontface = "bold",
+            inherit.aes = FALSE) +
+
+  scale_fill_manual(values = c("Rural Areas" = "#000000", "Urban Areas" = "#000000")) +
+
+  labs(
+    x = "Subjective Wellbeing Factor Score",
+    y = "Residence Type"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(hjust = 0.5),
+    axis.title = element_text(size = 12),
+    axis.text  = element_text(size = 11)
+  ) +
+  xlim(-5.0, 3)+
+  coord_cartesian(ylim = c(1, 2.5))
+```
+
+```{r}
+hist(df$Wellbeing_Factor, breaks = 30,
+     main = "Distribution of CFA-derived Wellbeing Factor",
+     col = "lightcoral", xlab = "Wellbeing_Factor")
+```
+
+```{r}
+ggplot(df) +
+  geom_density(aes(x = Wellbeing_average), fill = "blue", alpha = 0.4) +
+  geom_density(aes(x = Wellbeing_Factor), fill = "red", alpha = 0.4) +
+  labs(title = "Comparison of Wellbeing Measures: CFA Factor vs. Mean",
+       x = "Wellbeing Score", y = "Density") +
+  theme_minimal()
+```
+
+```{r}
+Wellbeing_long <- df %>%
+  select(WB_Satisfied, WB_ThingsWorthwhile, WB_Happy, WB_Anxious_rev) %>%
+  pivot_longer(cols = everything(), names_to = "Indicator", values_to = "Score") %>%
+  filter(!is.na(Score))
+
+Wellbeing_long$Indicator <- dplyr::recode(Wellbeing_long$Indicator,
+  "WB_Satisfied" = "Life Satisfaction",
+  "WB_ThingsWorthwhile" = "Sense of Worthwhileness",
+  "WB_Happy" = "Happiness",
+  "WB_Anxious_rev" = "Low Anxiety"
+)
+
+ggplot(Wellbeing_long, aes(x = Score)) +
+  geom_density(fill = "skyblue", alpha = 0.6) +
+  facet_wrap(~ Indicator, scales = "free", ncol = 2) +
+  labs(
+    x = "Score",
+    y = "Density"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    strip.text = element_text(size = 12),
+    plot.title = element_text(size = 14, hjust = 0.5)
+  )
+```
+
+```{r}
+Model_wellbeing <- '
+  Wellbeing =~ WB_Satisfied + WB_ThingsWorthwhile + WB_Happy + WB_Anxious_rev
+'
+
+fit_wellbeing <- cfa(Model_wellbeing, data = df, 
+                estimator = "WLSMV", 
+                ordered = c("WB_Satisfied", "WB_ThingsWorthwhile", "WB_Happy", "WB_Anxious_rev"),
+                std.lv = TRUE)
+
+summary(fit_wellbeing, fit.measures = TRUE, standardized = TRUE)
+
+df$Wellbeing_factor <- lavPredict(fit_wellbeing)
+```
+
+# Digital Inclusion
+```{r}
+int_vars <- names(df)[startsWith(names(df), "INT")]
+print(int_vars)
+```
+
+### Digital skill (CFA)
+```{r}
+df <- df %>%
+  mutate(
+    skill_financial = as.integer(rowSums(across(c(INTUse_Activ_Finances,
+                                                  INTUse_Activ_Selling)), na.rm=TRUE) > 0),
+    skill_learning  = as.integer(rowSums(across(c(INTUse_Activ_OLLearning,
+                                                  INTUse_Activ_Learning,
+                                                  INTUse_Activ_ExClass)), na.rm=TRUE) > 0),
+    skill_travel    = as.integer(rowSums(across(c(INTUse_Activ_BookTravel,
+                                                  INTUse_Activ_BookAccomm)), na.rm=TRUE) > 0),
+    skill_comm      = as.integer(rowSums(
+      across(c(SOC_ChildVideocall, SOC_ChildPhone, SOC_ChildMail, SOC_ChildText,
+               SOC_FMVideocall, SOC_FMPhone, SOC_FMMail, SOC_FMText)),
+      na.rm=TRUE) > 0)
+  )
+
+skills_vars <- c("skill_financial","skill_learning",
+                 "skill_travel","skill_comm")
+
+df[skills_vars] <- lapply(df[skills_vars], function(x){
+  x <- ifelse(x %in% c(0,1), x, NA)
+  factor(x, levels=c(0,1), ordered=TRUE)
+})
+
+model_skills <- "
+Digital_skills =~ skill_financial + skill_learning + skill_travel +
+           skill_comm
+"
+
+fit_skills_wlsmv <- cfa(model_skills,
+                        data = df,
+                        ordered = skills_vars,
+                        estimator = 'WLSMV',
+                        std.lv = TRUE,
+                        parameterization = 'theta')
+
+summary(fit_skills_wlsmv, fit.measures = TRUE, standardized = TRUE)
+```
+
+```{r}
+df$Skill_count4 <- rowSums(sapply(df[, c("skill_financial","skill_learning",
+                                         "skill_travel","skill_comm")],
+                                  function(x) as.numeric(as.character(x))), na.rm=TRUE)
+
+df$Skill_factor <- lavPredict(fit_skills_wlsmv)
+cor(df$Skill_count4, df$Skill_factor, use="pairwise")
+```
+
+```{r}
+df$Skill_factor <- as.numeric(df$Skill_factor)
+ggplot(df, aes(x = Skill_count4, y = Skill_factor)) +
+  geom_jitter(width = 0.2, alpha = 0.4, color = "steelblue") +
+  stat_summary(fun = mean, geom = "point", shape = 21, size = 3, fill = "white", color = "black") +
+  geom_smooth(method = "lm", se = FALSE, color = "darkred") +
+  labs(
+    x = "Skill Count (0–4)",
+    y = "Digital Skills Factor Score",
+    title = "Comparison between Skill Count and CFA-Derived Factor Score"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+df$Skill_factor_z <- as.numeric(scale(df$Skill_factor))
+```
+
+```{r}
+labs <- c(
+  Digital_skills   = "Digital skills",
+  skill_financial   = "Financial",
+  skill_learning   = "Learning",
+  skill_travel     = "Travel booking",
+  skill_comm       = "Communication"
+)
+
+p <- lavaanPlot(
+  model = fit_skills_wlsmv,
+  labels = labs,
+  coefs  = TRUE, 
+  stand  = TRUE, 
+  covs   = FALSE,  
+  node_options = list(shape="box", fontsize=12, width=2.0),
+  edge_options = list(penwidth=1.2),
+  graph_options = list(layout="dot", rankdir="LR", nodesep="0.4", ranksep="0.7")
+)
+p
+
+DiagrammeRsvg::export_svg(p) |>
+  charToRaw() |>
+  rsvg::rsvg_png("digital_skills_cfa_std.png", width=2200, height=1200)
+```
+
+
+### Access Device (PCA)
+```{r}
+df <- df %>%
+  mutate(
+    Device_count = rowSums(select(., INTUse_Devices_Desktop,
+                                     INTUse_Devices_Laptop,
+                                     INTUse_Devices_Tablet,
+                                     INTUse_Devices_Smartphone), na.rm = TRUE),
+    Device_help = rowSums(select(., INTUse_Help_NewDevice), na.rm = TRUE),
+    Freq_use = case_when(
+      INTUse_Times %in% 1:3 ~ 1,
+      INTUse_Times %in% 4:6 ~ 0,
+      TRUE ~ NA_real_
+    )
+  )
+
+z_cols <- c("Device_count","Device_help","Freq_use")
+df <- df %>% mutate(across(all_of(z_cols), ~ as.numeric(scale(.)), .names = "{.col}_z"))
+```
+
+```{r}
+dev_raw <- df %>% select(all_of(z_cols)) %>% na.omit()
+R1 <- cor(dev_raw)
+cortest.bartlett(R1, n = nrow(dev_raw))
+KMO(R1)
+```
+
+```{r}
+pca_data_dev <- df %>%
+  select(all_of(z_cols)) %>%
+  na.omit() 
+
+pca_device <- prcomp(pca_data_dev, center = FALSE, scale. = FALSE)
+
+summary(pca_device)
+loadings_dev <- pca_device$rotation
+print(loadings_dev)
+```
+
+```{r}
+df$AccessDevice_PCA <- NA_real_
+df$AccessDevice_PCA[complete.cases(df[z_cols])] <- pca_device$x[,1]
+df$AccessDevice_PCA_z <- as.numeric(scale(df$AccessDevice_PCA))
+summary(df$AccessDevice_PCA_z)
+```
+
+### Access Connectivity (PCA)
+```{r}
+df <- df %>%
+  mutate(
+    Conn_place_count = rowSums(select(., starts_with("INTUse_Places_")), na.rm = TRUE),
+    Conn_help_count = rowSums(select(., INTUse_Help_NewBB,
+                                        INTUse_Help_UpgradeBB,
+                                        INTUse_Help_NewDataPack), na.rm = TRUE),
+    Conn_support_count = rowSums(select(., INTUse_Supports_BBAccess,
+                                           INTUse_Supports_AffBBand,
+                                           INTUse_Supports_AffMobDev), na.rm = TRUE)
+  ) %>%
+  mutate(across(
+    c(Conn_place_count, Conn_help_count, Conn_support_count),
+    ~ as.numeric(scale(.)),
+    .names = "{.col}_z"
+  ))
+```
+
+```{r}
+z_cols2 <- c("Conn_place_count_z", "Conn_help_count_z", "Conn_support_count_z")
+
+pca_data <- df %>%
+  select(all_of(z_cols2)) %>%
+  drop_na()
+
+pca_conn <- prcomp(pca_data, center = FALSE, scale. = FALSE)  
+
+summary(pca_conn)
+loadings <- pca_conn$rotation
+loadings
+
+
+df$AccessConnect_PCA <- NA_real_
+df$AccessConnect_PCA[complete.cases(df[z_cols2])] <- pca_conn$x[,1]
+
+df$AccessConnect_PCA_z <- as.numeric(scale(df$AccessConnect_PCA))
+
+summary(df$AccessConnect_PCA_z)
+```
+
+```{r}
+Conn_raw <- df %>%
+  select(Conn_place_count, Conn_help_count, Conn_support_count) %>%
+  na.omit()
+
+R2 <- cor(Conn_raw) 
+
+bartlett_res2 <- cortest.bartlett(R2, n = nrow(Conn_raw))
+print(bartlett_res2)
+
+kmo_res2 <- KMO(R2)
+print(kmo_res2)
+```
+
+```{r}
+pca_conn <- prcomp(pca_data, center = FALSE, scale. = FALSE)
+summary(pca_conn)$importance
+```
+### Constructing Digital Inclusion Indicator
+```{r}
+df <- df %>%
+  mutate(
+    DigitalInclusion = ifelse(
+      rowSums(!is.na(cbind(AccessConnect_PCA_z, AccessDevice_PCA_z, Skill_factor_z))) >= 2,
+      rowMeans(cbind(AccessConnect_PCA_z, AccessDevice_PCA_z, Skill_factor_z), na.rm = TRUE),
+      NA_real_
+    )
+  )
+sum(is.na(df$DigitalInclusion))       
+mean(is.na(df$DigitalInclusion)) * 100 
+
+df$DigitalInclusion_z <- as.numeric(scale(df$DigitalInclusion))
+summary(df$DigitalInclusion_z)
+```
+
+```{r}
+ggplot(df, aes(x = DigitalInclusion_z)) +
+  geom_histogram(aes(y = ..density..), 
+                 bins = 30, 
+                 fill = "grey80",
+                 color = "grey20", 
+                 alpha = 0.8) +
+  geom_density(color = "black", 
+               size = 1.2) +
+  labs(
+    x = "Digital Inclusion (z-score)",
+    y = "Density"
+  ) +
+  theme_minimal(base_family = "Helvetica") + 
+  theme(
+    plot.title = element_text(color = "black"),
+    axis.title = element_text(color = "black"),
+    axis.text = element_text(color = "black")
+  )
+
+```
+
+```{r}
+min(df$DigitalInclusion_z, na.rm=TRUE)
+max(df$DigitalInclusion_z, na.rm=TRUE)
+
+outliers <- df %>% 
+  filter(abs(DigitalInclusion_z) > 3)
+
+n_outliers <- nrow(outliers)
+prop_outliers <- n_outliers / nrow(df)
+
+n_outliers    
+prop_outliers  
+```
+
+```{r}
+df %>%
+  mutate(
+    Urban_Rural_Type = factor(Urban_Rural_Type, labels = c("Urban", "Rural"))
+  ) %>%
+  ggplot(aes(x = DigitalInclusion_z)) +
+  geom_density(alpha = 0.7, fill = "grey70", color = "black") + 
+  facet_grid(Urban_Rural_Type ~ .) +
+  labs(
+    x     = "Digital Inclusion (z-score)",
+    y     = "Density"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(hjust = 0.5)
+  )
+```
+
+# SEM
+```{r}
+df$Urban_Rural_Type_num <- ifelse(df$Urban_Rural_Type == "Urban Areas", 1, 0)
+df$DI_x_Urban_Rural <- df$DigitalInclusion_z * df$Urban_Rural_Type_num
+```
+
+```{r}
+model_sem <- '
+  Wellbeing =~ WB_Satisfied + WB_ThingsWorthwhile + WB_Happy + WB_Anxious_rev
+
+  Wellbeing ~ DigitalInclusion_z + DI_x_Urban_Rural + DEM_Age_Band + DEM_Gender + Economic_Activity_Status + Living_Status + HE_IllnessActivity + WB_EnoughTime 
+'
+
+fit_mod <- sem(model_sem, data = df, estimator = "MLR")
+summary(fit_mod, fit.measures = TRUE, standardized = TRUE)
+```
+```{r}
+lavInspect(fit_mod, "r2")
+```
+```{r}
+summary(fit_mod, fit.measures = TRUE, standardized = TRUE, ci = TRUE) 
+```
+```{r}
+fit_mod <- sem(model_sem, data = df, estimator = "MLR")
+
+std_tab <- standardizedSolution(fit_mod, ci = TRUE)
+
+coef_all <- subset(
+  std_tab,
+  op == "~" & lhs == "Wellbeing",
+  select = c("rhs","est.std","se","z","pvalue","ci.lower","ci.upper")
+)
+
+coef_all[order(abs(coef_all$est.std), decreasing = TRUE), ]
+```
+
+```{r}
+df$Urban_Rural_Type <- factor(df$Urban_Rural_Type, labels = c("Urban", "Rural"))
+```
+
+```{r}
+ggplot(df, aes(x = DigitalInclusion_z, y = Wellbeing_factor, 
+               color = Urban_Rural_Type, fill = Urban_Rural_Type)) +
+  geom_point(alpha = 0.2, shape = 16) +
+  geom_smooth(method = "lm", se = TRUE, fullrange = TRUE,
+              alpha = 0.3, size = 0.9, aes(linetype = Urban_Rural_Type)) +
+  
+  scale_color_manual(
+    values = c("Urban" = "#1C1C1C",  
+               "Rural" = "#4B4E6D") 
+  ) +
+  scale_fill_manual(
+   values = c("Urban" = "#2C3E50", 
+               "Rural" = "#7E5C3A") 
+  ) +
+
+  labs(
+    x        = "Digital Inclusion Index (z-score)",
+    y        = "Wellbeing",
+    color    = "Residence Type",
+    fill     = "Residence Type",
+    linetype = "Residence Type"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title   = element_text(size = 12, hjust = 0.5),
+    axis.title.x = element_text(size = 10), 
+    axis.title.y = element_text(size = 10), 
+    legend.title = element_text(size = 10),
+    legend.position = "bottom"
+  )
+```
+
+```{r}
+m  <- lm(Wellbeing_factor ~ DigitalInclusion_z * Urban_Rural_Type, data = df)
+co <- coef(m); V <- vcov(m)
+
+lev <- levels(df$Urban_Rural_Type) 
+
+if (paste0("DigitalInclusion_z:Urban_Rural_Type", lev[2]) %in% names(co)) {
+  int_name <- paste0("DigitalInclusion_z:Urban_Rural_Type", lev[2])
+} else {
+  int_name <- paste0("Urban_Rural_Type", lev[2], ":DigitalInclusion_z")
+}
+
+b1     <- co["DigitalInclusion_z"]
+se_b1  <- sqrt(V["DigitalInclusion_z","DigitalInclusion_z"])
+b3     <- co[int_name] 
+var_o  <- V["DigitalInclusion_z","DigitalInclusion_z"] + V[int_name,int_name] +
+          2*V["DigitalInclusion_z", int_name]
+se_o   <- sqrt(var_o)
+
+if (lev[1] == "Urban") {
+  urb_est <- b1;             urb_lwr <- b1 - 1.96*se_b1;  urb_upr <- b1 + 1.96*se_b1
+  rur_est <- b1 + b3;        rur_lwr <- rur_est - 1.96*se_o; rur_upr <- rur_est + 1.96*se_o
+} else {
+  rur_est <- b1;             rur_lwr <- b1 - 1.96*se_b1;  rur_upr <- b1 + 1.96*se_b1
+  urb_est <- b1 + b3;        urb_lwr <- urb_est - 1.96*se_o; urb_upr <- urb_est + 1.96*se_o
+}
+
+lab_urban <- sprintf("Urban slope = %.3f  [%.3f, %.3f]", urb_est, urb_lwr, urb_upr)
+lab_rural <- sprintf("Rural slope = %.3f  [%.3f, %.3f]", rur_est, rur_lwr, rur_upr)
+
+xr <- range(df$DigitalInclusion_z, na.rm = TRUE)
+yr <- range(df$Wellbeing_factor,  na.rm = TRUE)
+x_pos  <- xr[2] - 0.02 * diff(xr)
+y_base <- yr[1] + 0.06 * diff(yr)
+y_gap  <- 0.12 * diff(yr) 
+
+library(ggplot2)
+
+ggplot(df, aes(x = DigitalInclusion_z, y = Wellbeing_factor, 
+               color = Urban_Rural_Type, fill = Urban_Rural_Type)) +
+  geom_point(alpha = 0.2, shape = 16) +
+  geom_smooth(method = "lm", se = TRUE, fullrange = TRUE,
+              alpha = 0.3, size = 0.9, aes(linetype = Urban_Rural_Type)) +
+  scale_color_manual(values = c("Urban" = "#1C1C1C", "Rural" = "#4B4E6D")) +
+  scale_fill_manual(values  = c("Urban" = "#2C3E50", "Rural" = "#7E5C3A")) +
+  labs(
+    x = "Digital Inclusion Index (z-score)",
+    y = "Wellbeing",
+    color = "Residence Type",
+    fill  = "Residence Type",
+    linetype = "Residence Type",
+    caption = "Shaded areas = 95% CIs. Wider band for Rural mainly reflects its smaller sample / sparser high-DI data."
+  ) +
+  annotate("text", x = x_pos, y = y_base,         label = lab_rural,
+           hjust = 1, vjust = 0, size = 3.6, color = "#4B4E6D") +
+  annotate("text", x = x_pos, y = y_base + y_gap, label = lab_urban,
+           hjust = 1, vjust = 0, size = 3.6, color = "#1C1C1C") +
+  coord_cartesian(clip = "off") +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "bottom",
+    plot.caption = element_text(size = 9, colour = "grey30"),
+    plot.title   = element_text(size = 12, hjust = 0.5),
+    axis.title.x = element_text(size = 10),
+    axis.title.y = element_text(size = 10),
+    legend.title = element_text(size = 10)
+  )
+```
+
+
+```{r}
+lavaanPlot(model = fit_mod, 
+           stand = TRUE,
+           coefs = TRUE,
+           covs = FALSE,
+           stars = "regress",
+            digits = 3, 
+           labels = list(
+             DigitalInclusion_z     = "Digital Inclusion",
+             DI_x_Urban_Rural       = "DI × Urban/Rural",
+             DEM_Age_Band           = "Age Group",
+             DEM_Gender             = "Gender",
+             Economic_Activity_Status ="Economic Activity",
+             Living_Status          = "Living Status",
+             HE_IllnessActivity     = "Health Limitation",
+             WB_EnoughTime          = "Enough Time",
+             Wellbeing              = "Wellbeing",
+             WB_Satisfied           = "Satisfied",
+             WB_ThingsWorthwhile    = "Worthwhile",
+             WB_Happy               = "Happy",
+             WB_Anxious_rev         = "Anxious (Reversed)"
+           ))
+```
+
+
+# Robustness Checks
+```{r}
+### OLS
+lm_fit <- lm(
+  Wellbeing_factor ~ DigitalInclusion_z +
+                     DI_x_Urban_Rural +
+                     DEM_Age_Band +
+                     DEM_Gender +
+                     Economic_Activity_Status +
+                     Living_Status + 
+                     HE_IllnessActivity +
+                     WB_EnoughTime,
+  data = df
+)
+
+vcov_hc3 <- vcovHC(lm_fit, type = "HC3")
+
+coeftest(lm_fit, vcov. = vcov_hc3)
+```
+
+```{r}
+vif(lm_fit)
+
+resid_values <- rstandard(lm_fit)
+par(mfrow = c(1, 2))
+hist(resid_values,
+     main = "Histogram of Standardized Residuals",
+     xlab = "Standardized Residual")
+qqnorm(resid_values); qqline(resid_values)
+
+bptest(lm_fit)
+```
+
+```{r}
+df$UrbanRuralF <- factor(df$Urban_Rural_Type, levels = c("Rural", "Urban"))
+
+lm_fit2 <- lm(
+  Wellbeing_factor ~ DigitalInclusion_z * UrbanRuralF +
+    DEM_Age_Band + DEM_Gender + Economic_Activity_Status +
+    Living_Status + Ethnic_Group + HE_IllnessActivity + WB_EnoughTime,
+  data = df
+)
+names(coef(lm_fit2))
+
+
+interact_plot(
+  lm_fit2,
+  pred      = "DigitalInclusion_z",
+  modx      = "UrbanRuralF",
+  modx.labels = c("Rural", "Urban"),
+  plot.points  = TRUE,
+  interval     = TRUE,
+  int.width    = 0.95,
+  x.label      = "Digital Inclusion (z-score)",
+  y.label      = "Wellbeing (Factor Score)",
+  main.title   = "Interaction: Digital Inclusion × Urban/Rural"
+)
+```
+
+
+# Sensitivity Analysis
+```{r}
+# Alternative DV
+df <- df 
+model_moderated_alt <- '
+  Wellbeing_average ~ DigitalInclusion_z + DI_x_Urban_Rural + DEM_Age_Band + DEM_Gender + Economic_Activity_Status + Living_Status + HE_IllnessActivity + WB_EnoughTime
+'
+
+fit_mod_alt <- sem(
+  model_moderated_alt,
+  data      = df,
+  estimator = "MLR",
+  missing   = "FIML"
+)
+
+summary(
+  fit_mod_alt,
+  fit.measures = TRUE,
+  standardized = TRUE
+)
+```
+
+
+```{r}
+# Remote extreme values
+df <- df %>%
+  mutate(
+    Well_z     = as.numeric(scale(Wellbeing_factor)),  
+    is_extreme = abs(Well_z) > 3        
+  )
+
+df_no_extreme <- df %>%
+  filter(!is_extreme)
+
+nrow(df_no_extreme)  
+```
+
+```{r}
+model_mod_noext <- '
+  Well_z ~ DigitalInclusion_z + DI_x_Urban_Rural + DEM_Age_Band + DEM_Gender + Economic_Activity_Status + Living_Status + HE_IllnessActivity + WB_EnoughTime
+'
+
+fit_mod_noext <- sem(
+  model_mod_noext,
+  data      = df_no_extreme,
+  estimator = "MLR",
+  missing   = "FIML"
+)
+
+summary(fit_mod_noext, fit.measures = TRUE, standardized = TRUE)
+```
+
+
+
+```{r}
+# subsamples
+df_urban <- df %>%
+  filter(Urban_Rural_Type == "Rural")
+
+model_sem <- '
+  Wellbeing =~ WB_Satisfied + WB_ThingsWorthwhile + WB_Happy + WB_Anxious_rev
+
+  Wellbeing ~ DigitalInclusion_z + DEM_Age_Band + DEM_Gender + Economic_Activity_Status + Living_Status + HE_IllnessActivity + WB_EnoughTime 
+'
+
+fit_mod_urban <- sem(model_sem, data = df_urban, estimator = "MLR")
+
+summary(fit_mod_urban, fit.measures = TRUE, standardized = TRUE)
+```
+```{r}
+df_rural <- df %>%
+  filter(Urban_Rural_Type == "Urban")
+
+model_sem <- '
+  Wellbeing =~ WB_Satisfied + WB_ThingsWorthwhile + WB_Happy + WB_Anxious_rev
+
+  Wellbeing ~ DigitalInclusion_z + DEM_Age_Band + DEM_Gender + Economic_Activity_Status + Living_Status + HE_IllnessActivity + WB_EnoughTime 
+'
+
+fit_mod_urban <- sem(model_sem, data = df_rural, estimator = "MLR")
+
+summary(fit_mod_urban, fit.measures = TRUE, standardized = TRUE)
+```
+
+
+```{r}
+summary(lm(Wellbeing_factor ~ DigitalInclusion_z + DI_x_Urban_Rural + Urban_Rural_Type_num + DEM_Age_Band + DEM_Gender + Economic_Activity_Status + Living_Status + HE_IllnessActivity + WB_EnoughTime, 
+           data = subset(df, Urban_Rural_Type == "Urban")))
+
+summary(lm(Wellbeing_factor ~ DigitalInclusion_z + DI_x_Urban_Rural + Urban_Rural_Type_num + DEM_Age_Band + DEM_Gender + Economic_Activity_Status + Living_Status  + HE_IllnessActivity + WB_EnoughTime, 
+           data = subset(df, Urban_Rural_Type == "Rural")))
+```
+
+
+```{r}
+lm1 <- lm(Wellbeing_factor ~ DigitalInclusion_z + DI_x_Urban_Rural + DEM_Age_Band + DEM_Gender + Economic_Activity_Status + Living_Status + Ethnic_Group + HE_IllnessActivity + WB_EnoughTime, data = df)
+summary(lm1)
+
+resid_values <- rstandard(lm1)
+hist(resid_values, main = "Histogram of Residuals", col = "lightblue")
+qqnorm(resid_values); qqline(resid_values)
+
+modindices(fit_mod, sort. = TRUE, minimum.value = 10)
+```
+
+
+
+
+```{r}
+library(dplyr)
+library(gtsummary)
+
+df <- df %>%
+  mutate(
+    Urban_Rural_Type = factor(Urban_Rural_Type_num, levels = c(1, 0), labels = c("Urban", "Rural")),
+    DEM_Gender = factor(DEM_Gender, levels = c(1, 2), labels = c("Male", "Female")),
+    DEM_Age_Band_grouped = case_when(
+      DEM_Age_Band %in% c(1, 2) ~ "50–59years",
+      DEM_Age_Band %in% c(3, 4) ~ "60–69years",
+      DEM_Age_Band %in% c(5, 6) ~ "70+years",
+      TRUE ~ NA_character_
+    ),
+    DEM_Age_Band_grouped = factor(DEM_Age_Band_grouped, levels = c("50–59years", "60–69years", "70+years")),
+    Economic_Activity_Status = factor(Economic_Activity_Status),
+    Living_Status = factor(Living_Status),
+    Ethnic_Group = factor(Ethnic_Group),
+    IllnessActivity = factor(IllnessActivity),
+    WB_EnoughTime = factor(WB_EnoughTime),
+    DigitalInclusion     = as.numeric(DigitalInclusion),
+    Wellbeing_Factor     = as.numeric(Wellbeing_Factor),
+    WB_Satisfied         = as.numeric(WB_Satisfied),
+    WB_ThingsWorthwhile  = as.numeric(WB_ThingsWorthwhile),
+    WB_Happy             = as.numeric(WB_Happy),
+    WB_Anxious_rev       = as.numeric(WB_Anxious_rev),
+    AccessConnect_PCA  = as.numeric(AccessConnect_PCA),
+    AccessDevice_PCA   = as.numeric(AccessDevice_PCA),
+    Skill_factor       = as.numeric(Skill_factor)
+  )
+
+df %>%
+  select(
+    Urban_Rural_Type,
+    DigitalInclusion,
+    Wellbeing_Factor,
+    WB_Satisfied,
+    WB_ThingsWorthwhile,
+    WB_Happy,
+    WB_Anxious_rev,
+    AccessConnect_PCA,
+    AccessDevice_PCA,
+    Skill_factor,
+    DEM_Gender,
+    DEM_Age_Band_grouped,
+    Economic_Activity_Status,
+    Living_Status,
+    Ethnic_Group,
+    IllnessActivity,
+    WB_EnoughTime
+  ) %>%
+  tbl_summary(
+    by = Urban_Rural_Type,
+    statistic = list(
+      all_continuous() ~ "{mean} ({sd})",
+      all_categorical() ~ "{n} ({p}%)"
+    ),
+    digits = all_continuous() ~ 2,
+    label = list(
+      DigitalInclusion ~ "Digital Inclusion",
+      Wellbeing_Factor ~ "Subjective Wellbeing ",
+      WB_Satisfied ~ "Life Satisfaction",
+      WB_ThingsWorthwhile ~ "Life Worthwhile",
+      WB_Happy ~ "Happiness",
+      WB_Anxious_rev ~ "Low Anxiety",
+      AccessConnect_PCA ~ "Internet Connectivity",
+      AccessDevice_PCA ~ "Device Access",
+      Skill_factor ~ "Digital Skills",
+      DEM_Gender ~ "Gender",
+      DEM_Age_Band_grouped ~ "Age Group",
+      Economic_Activity_Status ~ "Economic Activity",
+      Living_Status ~ "Living Status",
+      Ethnic_Group ~ "Ethnic Group",
+      IllnessActivity ~ "Health Limitation", 
+      WB_EnoughTime ~ "Enough Time"
+    ),
+    missing = "no"
+  ) %>%
+  add_overall() %>%
+  modify_header(label = "**Variable**") %>%
+  modify_caption("**Table 4.1. Descriptive Statistics by Urban-Rural Group**")
+```
+
+
+```{r}
+library(DiagrammeR)
+library(DiagrammeRsvg)
+library(rsvg)
+
+dag_plot <- grViz("
+digraph dag {
+  graph [layout = dot, rankdir = TB, splines = false]
+
+  node [shape = circle, 
+        style = filled, 
+        fillcolor = black, 
+        fontcolor = white, 
+        fontsize = 9, 
+        width = 1, 
+        fixedsize = true]
+
+  DEM_Gender [label = 'Gender']
+  DEM_Age_Band [label = 'Age']
+  Economic_Activity_Status [label = 'Economic Activity']
+  HE_IllnessActivity [label = 'Health Limitation']
+  Living_Status [label = 'Living Status']
+  WB_EnoughTime [label = 'Enough Time']
+  Urban_Rural_Type_num [label = 'Urban/Rural']
+  DI_x_Urban_Rural [label = 'DI x Urban/Rural']
+  DigitalInclusion_z [label = 'Digital Inclusion']
+  Wellbeing [label = 'Wellbeing']
+
+  { rank = same; DigitalInclusion_z; DI_x_Urban_Rural }
+  { rank = same; Wellbeing }
+  { rank = same; DEM_Gender; DEM_Age_Band; Economic_Activity_Status; HE_IllnessActivity; Living_Status; WB_EnoughTime }
+
+  DigitalInclusion_z     -> Wellbeing
+  DI_x_Urban_Rural       -> Wellbeing
+  DigitalInclusion_z     -> DI_x_Urban_Rural
+  Urban_Rural_Type_num   -> DI_x_Urban_Rural
+
+  DEM_Gender             -> DigitalInclusion_z
+  DEM_Gender             -> Wellbeing
+  DEM_Age_Band           -> DigitalInclusion_z
+  DEM_Age_Band           -> Wellbeing
+  Economic_Activity_Status -> DigitalInclusion_z
+  Economic_Activity_Status -> Wellbeing
+  HE_IllnessActivity     -> DigitalInclusion_z
+  HE_IllnessActivity     -> Wellbeing
+  Living_Status          -> Wellbeing
+  WB_EnoughTime          -> Wellbeing
+}
+")
+
+svg <- export_svg(dag_plot)
+rsvg_pdf(charToRaw(svg), file = "dag_vertical_by_layer.pdf")
+```
+
+
+
+
